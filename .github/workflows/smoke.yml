@@ -1,0 +1,86 @@
+name: ctl native credential platform smoke
+on:
+  workflow_dispatch:
+    inputs:
+      cli_version:
+        description: Exact published CLI version containing native credential support
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  smoke:
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        mode: [keychain, vault]
+        include:
+          - os: ubuntu-latest
+            mode: headless
+    runs-on: ${{ matrix.os }}
+    env:
+      CLI_VERSION: ${{ inputs.cli_version }}
+      SMOKE_MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate published version input
+        shell: bash
+        run: |
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.env.CLI_VERSION)) process.exit(1)'
+      - uses: actions/setup-python@v5
+        if: runner.os != 'Windows'
+        with:
+          python-version: '3.x'
+      - name: Install Linux Secret Service
+        if: runner.os == 'Linux' && matrix.mode != 'headless'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus-x11 gnome-keyring libsecret-tools
+      - name: Linux keychain or vault with a disposable Secret Service
+        if: runner.os == 'Linux' && matrix.mode != 'headless'
+        run: dbus-run-session -- bash scripts/linux.sh "$CLI_VERSION" "$SMOKE_MODE"
+      - name: Linux without Secret Service
+        if: runner.os == 'Linux' && matrix.mode == 'headless'
+        run: bash scripts/linux.sh "$CLI_VERSION" headless
+      - name: Prepare disposable macOS Keychain
+        if: runner.os == 'macOS'
+        run: |
+          keychain="$RUNNER_TEMP/ctl-smoke.keychain-db"
+          security create-keychain -p '' "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p '' "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
+      - name: macOS Keychain or vault
+        if: runner.os == 'macOS'
+        run: node run-smoke.mjs "$CLI_VERSION" "$SMOKE_MODE"
+      - name: Install Windows ConPTY driver only in this test repository
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+      - name: Windows PowerShell through ConPTY
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node run-smoke.mjs $env:CLI_VERSION $env:SMOKE_MODE pwsh
+      - name: Windows cmd through ConPTY
+        if: always() && runner.os == 'Windows'
+        shell: cmd
+        run: node run-smoke.mjs "%CLI_VERSION%" "%SMOKE_MODE%" cmd
+      - name: Remove disposable macOS Keychain
+        if: always() && runner.os == 'macOS'
+        run: security delete-keychain "$RUNNER_TEMP/ctl-smoke.keychain-db"
+      - name: Upload sanitized smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctl-${{ matrix.os }}-${{ matrix.mode }}
+          path: logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
