@@ -88,10 +88,17 @@ reason/detail) through the live diagnostic channel. Windows temporary-directory
 cleanup retries eight times with a 200 ms retry delay; exhaustion warns without
 replacing the original error.
 
-Windows ACL inspection no longer starts Windows PowerShell. The CLI uses a
+CLI ACL inspection does not start Windows PowerShell. The CLI uses a
 bounded Node/Win32 bridge for full owner+DACL SDDL, caches the current SID, and
 sets new private ACLs with icacls. The harness separately asserts current-user
 ownership, protected inheritance and current-user-only grants on all native
 files using the raw native readback. `[CLI PHASE] acl.done/acl.failed` includes
 `elapsedMs`; no paths, account names or SIDs are printed. The outer PowerShell
 and cmd shell coverage remains unchanged.
+
+For Windows diagnostics only, the harness runs bounded PowerShell 7 Get-Acl
+snapshots before CLI installation and on status mismatch. It prints ancestor
+labels plus state/native SDDL, never paths; absent targets are marked missing
+without creating them. Account and AppContainer SIDs are masked, while aliases,
+rights and ACE flags remain visible. Snapshot failure warns and continues.
+Parser failures stream a safe token kind/token and section with elapsedMs.

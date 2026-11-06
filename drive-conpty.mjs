@@ -77,7 +77,13 @@ function readControl() {
       const label=cliSteps.get(event.pid)??state.label;
       if(event.pid===state.childPid)state={...state,phase:'CLI '+event.phase};
       const flags=['secret','stdinTTY','stdoutTTY','stderrTTY'].filter(key=>typeof event[key]==='boolean').map(key=>`${key}=${event[key]}`);
-      if(['module-load','execution-policy','command-not-found','access-denied','timeout','spawn-failed','native-error','other'].includes(event.category))flags.push('category='+event.category);
+      if(['module-load','execution-policy','command-not-found','access-denied','timeout','spawn-failed','native-error','invalid-descriptor','other'].includes(event.category))flags.push('category='+event.category);
+      const tokenKinds=['unknown-ace-type','unsupported-ace-type','unknown-sid-alias','invalid-sid','unknown-flag','duplicate-flag','unknown-rights','unsupported-object-guid','section','missing-section','malformed-ace','malformed-descriptor','bounds','native-output','private-readback'];
+      if(tokenKinds.includes(event.tokenKind)&&typeof event.token==='string'){
+        const token=event.token.replace(/S-1-5-21-(?:\d+-)*\d+/g,'S-1-5-21-*').replace(/S-1-15-2-(?:\d+-)*\d+/g,'S-1-15-2-*');
+        if(/^(?:[A-Z]{1,32}|[OGDS]:|0x[0-9a-f]{1,16}|S-1-[0-9*-]{1,72}|<invalid>)$/i.test(token))flags.push(event.tokenKind+'='+token);
+      }
+      if(['O:','G:','D:','S:'].includes(event.section))flags.push('section='+event.section);
       if(Number.isFinite(event.elapsedMs)&&event.elapsedMs>=0)flags.push('elapsedMs='+event.elapsedMs);
       if(Number.isInteger(event.win32Code)&&event.win32Code>=0)flags.push('win32Code='+event.win32Code);
       if(Number.isInteger(event.exitCode)&&event.exitCode>=0)flags.push('exitCode='+event.exitCode);

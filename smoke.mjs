@@ -10,6 +10,7 @@ import http from 'node:http';
 import {once} from 'node:events';
 import {lookup} from 'node:dns/promises';
 import {assertNativeStatus,cleanupTemporaryRoot} from './smoke-support.mjs';
+import {windowsSddlSnapshot} from './windows-sddl.mjs';
 
 const source=process.argv[2];
 assert.ok(source,'Usage: node smoke.mjs <exact-version|local.tgz> [--vault|--headless]');
@@ -27,8 +28,10 @@ function trace(event,detail={}){
  controlState={...controlState,...detail,event,message:detail.message,childPid:event==='subprocess-start'||event==='subprocess-done'?(detail.childPid??controlState.childPid):undefined};
  appendFileSync(process.env.CTL_SMOKE_CONTROL,JSON.stringify(controlState)+'\n');
 }
-trace('phase',{phase:'install CLI'});
+const sddlSnapshot=async phase=>{if(process.platform!=='win32')return;trace('phase',{phase});await windowsSddlSnapshot(join(root,'state'),message=>trace('diagnostic',{message}));};
 try {
+await sddlSnapshot('Windows pre-install SDDL snapshot');
+trace('phase',{phase:'install CLI'});
 const npmCandidates=[process.env.npm_execpath,join(dirname(process.execPath),'node_modules/npm/bin/npm-cli.js'),join(dirname(process.execPath),'../lib/node_modules/npm/bin/npm-cli.js')];
 if(process.platform!=='win32')for(const dir of (process.env.PATH??'').split(delimiter)){try{npmCandidates.push(realpathSync(join(dir,'npm')));}catch{}}
 const npm=npmCandidates.find(p=>p&&existsSync(p));assert.ok(npm,'Install Node with npm (Node >=22.12).');
@@ -103,7 +106,7 @@ async function inspectWindowsAcl(){
  console.log(`PASS user-only vault ACLs (native readback, ${checked} objects)`);
 }
 const currentRecord=key=>{trace('phase',{phase:'read native credential record'});return backend==='keychain'?keychain.get(key):Promise.resolve(readFileSync(join(env.SYNOPKGLAND_CTL_DIR,'native',key+'.vault'),'utf8'));};
-const status=async(state)=>{const before=events.length,r=await json(['list','--refresh']);assertNativeStatus(state,r,readFileSync(process.env.CTL_SMOKE_CONTROL,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)),message=>{console.error(message);trace('diagnostic',{message});});assert.equal(events.length,before,'list must not probe native APIs');};
+const status=async(state)=>{const before=events.length,r=await json(['list','--refresh']);if(r?.data?.apps?.[0]?.auth?.state!==state)await sddlSnapshot('Windows status-mismatch SDDL snapshot');assertNativeStatus(state,r,readFileSync(process.env.CTL_SMOKE_CONTROL,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)),message=>{console.error(message);trace('diagnostic',{message});});assert.equal(events.length,before,'list must not probe native APIs');};
 async function human(label,args,expected,secret){
  trace('step-start',{label,secret,step:++step,phase:'interactive CLI'});
  console.log(`\nSTEP ${label}`);
