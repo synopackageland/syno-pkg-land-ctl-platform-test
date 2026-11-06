@@ -9,6 +9,7 @@ import {pathToFileURL} from 'node:url';
 import http from 'node:http';
 import {once} from 'node:events';
 import {lookup} from 'node:dns/promises';
+import {windowsPowerShellEnvironment} from './windows-powershell.mjs';
 import {assertNativeStatus,cleanupTemporaryRoot} from './smoke-support.mjs';
 
 const source=process.argv[2];
@@ -21,9 +22,10 @@ const spec=local?resolve(source):`@synopackageland/cli@${source}`;
 assert.ok(process.stdin.isTTY&&process.stdout.isTTY,'Run in a terminal; the smoke exercises real hidden prompts.');
 const headless=process.argv.includes('--headless'),vault=headless||process.argv.includes('--vault'),backend=vault?'encrypted-file':'keychain';
 const root=mkdtempSync(join(tmpdir(),"ctl platform 'smoke-")),install=join(root,'install');
-let controlState={label:'install',root,passphrase:'smoke independent passphrase'},step=0;
+const cliTrace=join(root,'ctl-phases.jsonl');appendFileSync(cliTrace,'',{mode:0o600});
+let controlState={label:'install',root,cliTrace,passphrase:'smoke independent passphrase'},step=0;
 function trace(event,detail={}){
- controlState={...controlState,...detail,event,message:detail.message};
+ controlState={...controlState,...detail,event,message:detail.message,childPid:event==='subprocess-start'||event==='subprocess-done'?(detail.childPid??controlState.childPid):undefined};
  appendFileSync(process.env.CTL_SMOKE_CONTROL,JSON.stringify(controlState)+'\n');
 }
 trace('phase',{phase:'install CLI'});
@@ -33,9 +35,8 @@ if(process.platform!=='win32')for(const dir of (process.env.PATH??'').split(deli
 const npm=npmCandidates.find(p=>p&&existsSync(p));assert.ok(npm,'Install Node with npm (Node >=22.12).');
 function child(args,{interactive=false,input='',env=process.env}={}){
  const phase=args[0]===npm?'npm install':`CLI ${args[2]??'subprocess'}`;
- trace('subprocess-start',{phase});
  return new Promise((done,reject)=>{
- const p=spawn(process.execPath,args,{env,stdio:interactive?'inherit':['pipe','pipe','pipe'],windowsHide:!interactive});let out='',err='';
+ const p=spawn(process.execPath,args,{env,stdio:interactive?'inherit':['pipe','pipe','pipe'],windowsHide:!interactive});trace('subprocess-start',{phase,childPid:p.pid});let out='',err='';
  if(!interactive){p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.stdin.end(input);}
  p.once('error',reject);p.once('close',code=>{trace('subprocess-done',{phase,exitCode:code});done({code,out,err});});
 });}
@@ -80,7 +81,7 @@ const server=http.createServer((req,res)=>{const chunks=[];req.on('data',b=>chun
  res.end(JSON.stringify(url.pathname.endsWith('/profile/')?{name:'Smoke User'}:url.pathname.endsWith('user-info')?{userId:'reader'}:{items:[{id:1}]}));
  });});server.listen(0,loopback);await once(server,'listening');
 const origin=`http://${loopback}:${server.address().port}`,profile='platform-smoke-'+nonce;
-const env={...process.env,SYNOPKGLAND_CTL_DIR:join(root,'state'),DSM_USERNAME:'smoke',DSM_PASSWORD:'synthetic-dsm-password'};delete env.DSM_URL;delete env.DSM_OTP;
+const env={...process.env,SYNOPKGLAND_CTL_DIR:join(root,'state'),SYNOPKGLAND_CTL_DIAGNOSTICS_FILE:cliTrace,DSM_USERNAME:'smoke',DSM_PASSWORD:'synthetic-dsm-password'};delete env.DSM_URL;delete env.DSM_OTP;
 trace('phase',{phase:'construct native credential stores'});
 const store=new CtlStore(env.SYNOPKGLAND_CTL_DIR),keychain=new NativeKeychain(),keys=[];
 const cli=(args,options={})=>child([bin,'ctl',...args,'--host',profile],{env,...options});
@@ -90,7 +91,8 @@ async function inspectWindowsAcl(){
  if(process.platform!=='win32'||!vault)return;
  trace('phase',{phase:'Windows PowerShell Get-Acl'});
  const source=`$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $files=@(Get-Item -LiteralPath $env:CTL_SMOKE_ACL_ROOT)+@(Get-ChildItem -LiteralPath $env:CTL_SMOKE_ACL_ROOT -Recurse -Force); foreach($f in $files){ $a=Get-Acl -LiteralPath $f.FullName; if(!$a.AreAccessRulesProtected -or $a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw 'Unsafe owner or inheritance'}; $allowed=$false; foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($r.AccessControlType -eq 'Allow'){if($r.IdentityReference.Value -ne $sid){throw 'Other principal allowed'}; $allowed=$true}}; if(!$allowed){throw 'No user access'} }; Write-Output 'PASS user-only vault ACLs'`;
- const r=await new Promise((done,reject)=>{const p=spawn('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(source,'utf16le').toString('base64')],{env:{...process.env,CTL_SMOKE_ACL_ROOT:join(env.SYNOPKGLAND_CTL_DIR,'native')},stdio:['ignore','pipe','pipe'],windowsHide:true});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.once('error',reject);p.once('close',code=>done({code,out,err}));});
+ const ps=windowsPowerShellEnvironment();
+ const r=await new Promise((done,reject)=>{const p=spawn(ps.file,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from(source,'utf16le').toString('base64')],{env:{...ps.env,CTL_SMOKE_ACL_ROOT:join(env.SYNOPKGLAND_CTL_DIR,'native')},stdio:['ignore','pipe','pipe'],windowsHide:true});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.once('error',reject);p.once('close',code=>done({code,out,err}));});
  assert.equal(r.code,0,r.out+r.err);console.log(r.out.trim());
 }
 const currentRecord=key=>{trace('phase',{phase:'read native credential record'});return backend==='keychain'?keychain.get(key):Promise.resolve(readFileSync(join(env.SYNOPKGLAND_CTL_DIR,'native',key+'.vault'),'utf8'));};

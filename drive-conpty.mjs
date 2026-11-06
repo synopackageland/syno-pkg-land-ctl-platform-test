@@ -1,7 +1,7 @@
 // Real ConPTY on Windows; --direct exercises this driver with a Unix PTY locally.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtempSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -30,6 +30,7 @@ const args = shell === '--direct' ? ['smoke.mjs', version, ...options]
   : ['/d', '/q', '/v:off', '/s', '/c', 'scripts\\windows-smoke.cmd'];
 const prompts = newPromptRegex();
 let terminal, raw = '', offset = 0, queryOffset = 0, hidden = 0;
+let cliPhaseCount=0;const cliSteps=new Map();
 let states = [], recordCount = 0, state = {label: 'startup', phase: 'spawn shell'};
 let deadline = Date.now() + waitMs, expected = 'first STEP/control event or prompt: ' + promptPattern;
 let answered = new Set(), stepKey, stopping = false, poll;
@@ -53,6 +54,7 @@ function readControl() {
   states = rows;
   for (const row of rows.slice(recordCount)) {
     state = row;
+    if(row.event==='subprocess-start'&&Number.isInteger(row.childPid))cliSteps.set(row.childPid,row.label);
     if (row.event === 'diagnostic' && typeof row.message === 'string') log(row.message);
     if (row.event === 'step-start' || (!row.event && stepKey !== row.label)) {
       stepKey = row.step ?? row.label;
@@ -65,7 +67,25 @@ function readControl() {
     waiting('prompt pattern: ' + promptPattern + ' OR STEP/subprocess completion');
   }
   recordCount = rows.length;
+  const file=state.cliTrace;
+  if(file&&existsSync(file)){
+    const contents=readFileSync(file,'utf8');
+    const events=contents.slice(0,contents.lastIndexOf('\n')+1).split('\n').filter(Boolean).map(line=>JSON.parse(line));
+    for(const event of events.slice(cliPhaseCount)){
+      // Only forward known safe fields, never arbitrary child diagnostic content.
+      if(typeof event.phase!=='string'||! /^(?:prompt|auth|acl)\.[a-z-]+$/.test(event.phase))continue;
+      const label=cliSteps.get(event.pid)??state.label;
+      if(event.pid===state.childPid)state={...state,phase:'CLI '+event.phase};
+      const flags=['secret','stdinTTY','stdoutTTY','stderrTTY'].filter(key=>typeof event[key]==='boolean').map(key=>`${key}=${event[key]}`);
+      if(['module-load','execution-policy','command-not-found','access-denied','timeout','spawn-failed','other'].includes(event.category))flags.push('category='+event.category);
+      if(Number.isInteger(event.exitCode)&&event.exitCode>=0)flags.push('exitCode='+event.exitCode);
+      log(`[CLI PHASE] STEP=${label}; phase=${event.phase}; ${flags.join(' ')}`);
+      if(event.pid===state.childPid)waiting('CLI '+event.phase+' completion or prompt pattern: '+promptPattern);
+    }
+    cliPhaseCount=events.length;
+  }
 }
+
 async function killTree() {
   if (!terminal?.pid) return;
   if (process.platform === 'win32') {

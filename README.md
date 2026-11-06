@@ -87,3 +87,10 @@ State mismatches print the complete redacted `ctl list --json` response (includi
 reason/detail) through the live diagnostic channel. Windows temporary-directory
 cleanup retries eight times with a 200 ms retry delay; exhaustion warns without
 replacing the original error.
+
+Windows ACL inspection launches inbox Windows PowerShell by absolute path with
+PSModulePath reset to its own inbox modules and ExecutionPolicy Bypass for that
+child only. The optional private CLI phase channel now reports auth/browser
+confirmation, ACL inspection, TTY/raw-mode setup, prompt write/flush and input
+wait. It contains no input values, prompt text, paths or SIDs. `[CLI PHASE]` lines
+are streamed even when ConPTY itself has not produced the expected prompt.
