@@ -78,3 +78,12 @@ queries receive terminal replies. No echo is required before advancing.
 default deadlines for local failure-injection checks; they cannot increase them.
 A possible Credential Manager dialog or native call stall is reported with its
 last subprocess/store phase; native Windows behavior still needs a hosted run.
+
+For an unpublished candidate, set optional workflow input `cli_tgz_url` to an
+HTTPS `.tgz` release-asset URL from this test repository. It overrides
+`cli_version`; the download SHA256 is printed and all modes use the local-tgz
+path. Downloads are bounded to 64 MiB / 120 seconds and use no GitHub token.
+State mismatches print the complete redacted `ctl list --json` response (including
+reason/detail) through the live diagnostic channel. Windows temporary-directory
+cleanup retries eight times with a 200 ms retry delay; exhaustion warns without
+replacing the original error.

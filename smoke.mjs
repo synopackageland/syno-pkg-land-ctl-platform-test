@@ -9,6 +9,7 @@ import {pathToFileURL} from 'node:url';
 import http from 'node:http';
 import {once} from 'node:events';
 import {lookup} from 'node:dns/promises';
+import {assertNativeStatus,cleanupTemporaryRoot} from './smoke-support.mjs';
 
 const source=process.argv[2];
 assert.ok(source,'Usage: node smoke.mjs <exact-version|local.tgz> [--vault|--headless]');
@@ -22,7 +23,7 @@ const headless=process.argv.includes('--headless'),vault=headless||process.argv.
 const root=mkdtempSync(join(tmpdir(),"ctl platform 'smoke-")),install=join(root,'install');
 let controlState={label:'install',root,passphrase:'smoke independent passphrase'},step=0;
 function trace(event,detail={}){
- controlState={...controlState,...detail,event};
+ controlState={...controlState,...detail,event,message:detail.message};
  appendFileSync(process.env.CTL_SMOKE_CONTROL,JSON.stringify(controlState)+'\n');
 }
 trace('phase',{phase:'install CLI'});
@@ -93,7 +94,7 @@ async function inspectWindowsAcl(){
  assert.equal(r.code,0,r.out+r.err);console.log(r.out.trim());
 }
 const currentRecord=key=>{trace('phase',{phase:'read native credential record'});return backend==='keychain'?keychain.get(key):Promise.resolve(readFileSync(join(env.SYNOPKGLAND_CTL_DIR,'native',key+'.vault'),'utf8'));};
-const status=async(state)=>{const before=events.length,r=await json(['list','--refresh']);assert.equal(r.data.apps[0].auth.state,state);assert.equal(events.length,before,'list must not probe native APIs');};
+const status=async(state)=>{const before=events.length,r=await json(['list','--refresh']);assertNativeStatus(state,r,readFileSync(process.env.CTL_SMOKE_CONTROL,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)),message=>{console.error(message);trace('diagnostic',{message});});assert.equal(events.length,before,'list must not probe native APIs');};
 async function human(label,args,expected,secret){
  trace('step-start',{label,secret,step:++step,phase:'interactive CLI'});
  console.log(`\nSTEP ${label}`);
@@ -156,4 +157,4 @@ try{
  server.closeAllConnections();await new Promise(done=>server.close(done));
 }
 
-} finally { rmSync(root,{recursive:true,force:true}); }
+} finally { cleanupTemporaryRoot(root); }

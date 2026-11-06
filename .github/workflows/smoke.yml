@@ -4,7 +4,12 @@ on:
     inputs:
       cli_version:
         description: Exact published CLI version containing native credential support
-        required: true
+        required: false
+        default: '0.50.0'
+        type: string
+      cli_tgz_url:
+        description: Optional public test-repository GitHub release .tgz URL (overrides cli_version)
+        required: false
         type: string
 permissions:
   contents: read
@@ -22,6 +27,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CLI_VERSION: ${{ inputs.cli_version }}
+      CLI_TGZ_URL: ${{ inputs.cli_tgz_url }}
       SMOKE_MODE: ${{ matrix.mode }}
     steps:
       - uses: actions/checkout@v4
@@ -30,10 +36,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Validate published version input
+      - name: Select npm version or download CLI release asset
         shell: bash
-        run: |
-          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.env.CLI_VERSION)) process.exit(1)'
+        timeout-minutes: 10
+        run: node prepare-cli-source.mjs
       - uses: actions/setup-python@v5
         if: runner.os != 'Windows'
         with:
@@ -45,10 +51,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends dbus-x11 gnome-keyring libsecret-tools
       - name: Linux keychain or vault with a disposable Secret Service
         if: runner.os == 'Linux' && matrix.mode != 'headless'
-        run: dbus-run-session -- bash scripts/linux.sh "$CLI_VERSION" "$SMOKE_MODE"
+        run: dbus-run-session -- bash scripts/linux.sh "$CLI_SOURCE" "$SMOKE_MODE"
       - name: Linux without Secret Service
         if: runner.os == 'Linux' && matrix.mode == 'headless'
-        run: bash scripts/linux.sh "$CLI_VERSION" headless
+        run: bash scripts/linux.sh "$CLI_SOURCE" headless
       - name: Prepare disposable macOS Keychain
         if: runner.os == 'macOS'
         run: |
@@ -60,7 +66,7 @@ jobs:
           security list-keychains -d user -s "$keychain"
       - name: macOS Keychain or vault
         if: runner.os == 'macOS'
-        run: node run-smoke.mjs "$CLI_VERSION" "$SMOKE_MODE"
+        run: node run-smoke.mjs "$CLI_SOURCE" "$SMOKE_MODE"
       - name: Install Windows ConPTY driver only in this test repository
         timeout-minutes: 10
         if: runner.os == 'Windows'
@@ -70,7 +76,7 @@ jobs:
         timeout-minutes: 10
         if: runner.os == 'Windows'
         shell: pwsh
-        run: node run-smoke.mjs $env:CLI_VERSION $env:SMOKE_MODE pwsh
+        run: node run-smoke.mjs $env:CLI_SOURCE $env:SMOKE_MODE pwsh
       - name: Upload Windows PowerShell diagnostics
         if: always() && runner.os == 'Windows'
         timeout-minutes: 10
@@ -84,7 +90,7 @@ jobs:
         timeout-minutes: 10
         if: always() && runner.os == 'Windows'
         shell: cmd
-        run: node run-smoke.mjs "%CLI_VERSION%" "%SMOKE_MODE%" cmd
+        run: node run-smoke.mjs "%CLI_SOURCE%" "%SMOKE_MODE%" cmd
       - name: Upload Windows cmd diagnostics
         if: always() && runner.os == 'Windows'
         timeout-minutes: 10

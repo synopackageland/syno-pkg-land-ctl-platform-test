@@ -53,6 +53,7 @@ function readControl() {
   states = rows;
   for (const row of rows.slice(recordCount)) {
     state = row;
+    if (row.event === 'diagnostic' && typeof row.message === 'string') log(row.message);
     if (row.event === 'step-start' || (!row.event && stepKey !== row.label)) {
       stepKey = row.step ?? row.label;
       answered = new Set();
