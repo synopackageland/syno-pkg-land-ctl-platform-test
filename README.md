@@ -44,8 +44,17 @@ the default keychain and recommend encrypted-file before testing the vault.
 
 All passwords/tokens are synthetic and supplied over a private temporary control
 file. PTY drivers assert hidden input never echoes, redact failures before output,
-and remove control files. Sanitized logs are written to `logs/` and uploaded even
-on failure. Native entries and temporary installations are cleaned in `finally`;
+and remove control files. The Windows driver streams STEP start/completion,
+subprocess phase and matched prompt names immediately; input values are never
+logged. Each expect has a 90-second deadline, including waits with noisy or
+missing output. Failure reports the current STEP, phase, expected prompt pattern
+and the last approximately 2 KB of redacted screen text. Sanitized logs are written to `logs/` and uploaded even
+on failure. Logs are persisted on every progress message. An independent
+supervisor enforces a 95-second driver silence limit and a 9-minute total limit;
+Windows process trees are stopped with external taskkill, without waiting for
+ConPTY shutdown callbacks. Windows install/run/upload steps have 10-minute
+limits within a 40-minute job. Each shell has an always-run artifact upload
+immediately after its run, as well as the final combined upload. Native entries and temporary installations are cleaned in `finally`;
 a forcibly terminated process may require runner disposal. Do not upload raw
 terminal captures, control files or temporary CLI state.
 
@@ -59,3 +68,13 @@ with a prerequisite error. Choose a release containing native credential support
 
 macOS and Windows require actual hosted runs before claiming platform acceptance.
 ConPTY does not silently fall back to stdin or skip hidden-prompt assertions.
+
+PowerShell runs a fixed encoded command with NoProfile/NonInteractive and
+PSReadLine removed; Node still receives a real ConPTY terminal. cmd uses a fixed
+batch file with quoted executable/version arguments. Input uses CR (never CRLF),
+prompt matching tolerates CRLF/ANSI/chunk boundaries and repaint, and cursor
+queries receive terminal replies. No echo is required before advancing.
+`CTL_SMOKE_EXPECT_TIMEOUT_MS` and `CTL_SMOKE_TOTAL_TIMEOUT_MS` can shorten the
+default deadlines for local failure-injection checks; they cannot increase them.
+A possible Credential Manager dialog or native call stall is reported with its
+last subprocess/store phase; native Windows behavior still needs a hosted run.

@@ -20,15 +20,23 @@ const spec=local?resolve(source):`@synopackageland/cli@${source}`;
 assert.ok(process.stdin.isTTY&&process.stdout.isTTY,'Run in a terminal; the smoke exercises real hidden prompts.');
 const headless=process.argv.includes('--headless'),vault=headless||process.argv.includes('--vault'),backend=vault?'encrypted-file':'keychain';
 const root=mkdtempSync(join(tmpdir(),"ctl platform 'smoke-")),install=join(root,'install');
-appendFileSync(process.env.CTL_SMOKE_CONTROL,JSON.stringify({label:'install',root,passphrase:'smoke independent passphrase'})+'\n');
+let controlState={label:'install',root,passphrase:'smoke independent passphrase'},step=0;
+function trace(event,detail={}){
+ controlState={...controlState,...detail,event};
+ appendFileSync(process.env.CTL_SMOKE_CONTROL,JSON.stringify(controlState)+'\n');
+}
+trace('phase',{phase:'install CLI'});
 try {
 const npmCandidates=[process.env.npm_execpath,join(dirname(process.execPath),'node_modules/npm/bin/npm-cli.js'),join(dirname(process.execPath),'../lib/node_modules/npm/bin/npm-cli.js')];
 if(process.platform!=='win32')for(const dir of (process.env.PATH??'').split(delimiter)){try{npmCandidates.push(realpathSync(join(dir,'npm')));}catch{}}
 const npm=npmCandidates.find(p=>p&&existsSync(p));assert.ok(npm,'Install Node with npm (Node >=22.12).');
-function child(args,{interactive=false,input='',env=process.env}={}){return new Promise((done,reject)=>{
+function child(args,{interactive=false,input='',env=process.env}={}){
+ const phase=args[0]===npm?'npm install':`CLI ${args[2]??'subprocess'}`;
+ trace('subprocess-start',{phase});
+ return new Promise((done,reject)=>{
  const p=spawn(process.execPath,args,{env,stdio:interactive?'inherit':['pipe','pipe','pipe'],windowsHide:!interactive});let out='',err='';
  if(!interactive){p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.stdin.end(input);}
- p.once('error',reject);p.once('close',code=>done({code,out,err}));
+ p.once('error',reject);p.once('close',code=>{trace('subprocess-done',{phase,exitCode:code});done({code,out,err});});
 });}
 console.log(`Installing CLI ${local?'tarball':source} from npm (no lifecycle scripts).`);
 const installed=await child([npm,'install','--prefix',install,'--ignore-scripts','--omit=dev','--omit=peer','--no-audit','--no-fund','--registry',process.env.SMOKE_NPM_REGISTRY??'https://registry.npmjs.org',spec]);
@@ -37,6 +45,7 @@ const pkg=join(install,'node_modules/@synopackageland/cli'),bin=join(pkg,'dist/b
 const required=['nas/store.js','ctl/native-store.js','ctl/native-metadata.js','ctl/native-schemas.js','ctl/descriptor.js'];
 assert.ok(required.every(relative=>existsSync(join(pkg,'dist',relative))),
  'Installed CLI lacks native credential support; select a version or local tarball containing dist/ctl/native-store.js.');
+trace('phase',{phase:'load native credential modules'});
 const load=relative=>import(pathToFileURL(join(pkg,'dist',relative)).href);
 const {CtlStore}=await load('nas/store.js');
 const {NativeKeychain,nativeScope}=await load('ctl/native-store.js');
@@ -71,22 +80,25 @@ const server=http.createServer((req,res)=>{const chunks=[];req.on('data',b=>chun
  });});server.listen(0,loopback);await once(server,'listening');
 const origin=`http://${loopback}:${server.address().port}`,profile='platform-smoke-'+nonce;
 const env={...process.env,SYNOPKGLAND_CTL_DIR:join(root,'state'),DSM_USERNAME:'smoke',DSM_PASSWORD:'synthetic-dsm-password'};delete env.DSM_URL;delete env.DSM_OTP;
+trace('phase',{phase:'construct native credential stores'});
 const store=new CtlStore(env.SYNOPKGLAND_CTL_DIR),keychain=new NativeKeychain(),keys=[];
 const cli=(args,options={})=>child([bin,'ctl',...args,'--host',profile],{env,...options});
 const json=async(args,expected=0,input='')=>{const r=await cli([...args,'--json'],{input});assert.equal(r.code,expected,r.out+r.err);return JSON.parse(r.out);};
 const business=()=>events.filter(e=>e.path.endsWith('/api/items')).length;
 async function inspectWindowsAcl(){
  if(process.platform!=='win32'||!vault)return;
+ trace('phase',{phase:'Windows PowerShell Get-Acl'});
  const source=`$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $files=@(Get-Item -LiteralPath $env:CTL_SMOKE_ACL_ROOT)+@(Get-ChildItem -LiteralPath $env:CTL_SMOKE_ACL_ROOT -Recurse -Force); foreach($f in $files){ $a=Get-Acl -LiteralPath $f.FullName; if(!$a.AreAccessRulesProtected -or $a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw 'Unsafe owner or inheritance'}; $allowed=$false; foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($r.AccessControlType -eq 'Allow'){if($r.IdentityReference.Value -ne $sid){throw 'Other principal allowed'}; $allowed=$true}}; if(!$allowed){throw 'No user access'} }; Write-Output 'PASS user-only vault ACLs'`;
  const r=await new Promise((done,reject)=>{const p=spawn('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(source,'utf16le').toString('base64')],{env:{...process.env,CTL_SMOKE_ACL_ROOT:join(env.SYNOPKGLAND_CTL_DIR,'native')},stdio:['ignore','pipe','pipe'],windowsHide:true});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.once('error',reject);p.once('close',code=>done({code,out,err}));});
  assert.equal(r.code,0,r.out+r.err);console.log(r.out.trim());
 }
-const currentRecord=key=>backend==='keychain'?keychain.get(key):Promise.resolve(readFileSync(join(env.SYNOPKGLAND_CTL_DIR,'native',key+'.vault'),'utf8'));
+const currentRecord=key=>{trace('phase',{phase:'read native credential record'});return backend==='keychain'?keychain.get(key):Promise.resolve(readFileSync(join(env.SYNOPKGLAND_CTL_DIR,'native',key+'.vault'),'utf8'));};
 const status=async(state)=>{const before=events.length,r=await json(['list','--refresh']);assert.equal(r.data.apps[0].auth.state,state);assert.equal(events.length,before,'list must not probe native APIs');};
 async function human(label,args,expected,secret){
+ trace('step-start',{label,secret,step:++step,phase:'interactive CLI'});
  console.log(`\nSTEP ${label}`);
- appendFileSync(process.env.CTL_SMOKE_CONTROL,JSON.stringify({label,secret,passphrase,root})+'\n');
  const r=await cli(args,{interactive:true});assert.equal(r.code,expected,`STEP ${label} exit`);
+ trace('step-done',{exitCode:r.code});
 }
 try{
  for(scheme of ['header','greader-client-login']){
@@ -126,7 +138,7 @@ try{
   // Ordinary auth with an existing record updates without --reset or backend selection.
   const beforeUpdate=await currentRecord(key);
   await human('ordinary update '+scheme,['auth','--app','CredentialSmoke'],0,scheme==='header'?nativeToken():password());
-  if(vault){await inspectWindowsAcl();store.native.setUnlock(async()=>passphrase);const record=await store.native.get(key);assert.equal(record.token,nativeToken());assert.ok(!JSON.stringify(record).includes(password()));const afterUpdate=await currentRecord(key);assert.notEqual(afterUpdate,beforeUpdate);assert.notEqual(JSON.parse(afterUpdate).nonce,JSON.parse(beforeUpdate).nonce);assert.ok(!afterUpdate.includes(nativeToken()));}
+  if(vault){await inspectWindowsAcl();trace('phase',{phase:'decrypt native credential record'});store.native.setUnlock(async()=>passphrase);const record=await store.native.get(key);assert.equal(record.token,nativeToken());assert.ok(!JSON.stringify(record).includes(password()));const afterUpdate=await currentRecord(key);assert.notEqual(afterUpdate,beforeUpdate);assert.notEqual(JSON.parse(afterUpdate).nonce,JSON.parse(beforeUpdate).nonce);assert.ok(!afterUpdate.includes(nativeToken()));}
   else {const record=JSON.parse(await currentRecord(key));assert.equal(record.token,nativeToken());assert.ok(!JSON.stringify(record).includes(password()));}
   permission=true;
   if(vault)await human('403 permission '+scheme,['smoke','items','list'],4);
@@ -139,6 +151,7 @@ try{
  }
  console.log('ALL PLATFORM SMOKE CHECKS PASSED');
 }finally{
+ trace('phase',{phase:'cleanup native credentials'});
  for(const key of keys)try{await store.native.delete(key);}catch{if(backend==='keychain')await keychain.delete(key).catch(()=>{});}
  server.closeAllConnections();await new Promise(done=>server.close(done));
 }

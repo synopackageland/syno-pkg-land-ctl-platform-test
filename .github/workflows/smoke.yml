@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   smoke:
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -62,17 +62,38 @@ jobs:
         if: runner.os == 'macOS'
         run: node run-smoke.mjs "$CLI_VERSION" "$SMOKE_MODE"
       - name: Install Windows ConPTY driver only in this test repository
+        timeout-minutes: 10
         if: runner.os == 'Windows'
         shell: pwsh
         run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
       - name: Windows PowerShell through ConPTY
+        timeout-minutes: 10
         if: runner.os == 'Windows'
         shell: pwsh
         run: node run-smoke.mjs $env:CLI_VERSION $env:SMOKE_MODE pwsh
+      - name: Upload Windows PowerShell diagnostics
+        if: always() && runner.os == 'Windows'
+        timeout-minutes: 10
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctl-${{ matrix.os }}-${{ matrix.mode }}-pwsh
+          path: logs/*-pwsh.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Windows cmd through ConPTY
+        timeout-minutes: 10
         if: always() && runner.os == 'Windows'
         shell: cmd
         run: node run-smoke.mjs "%CLI_VERSION%" "%SMOKE_MODE%" cmd
+      - name: Upload Windows cmd diagnostics
+        if: always() && runner.os == 'Windows'
+        timeout-minutes: 10
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctl-${{ matrix.os }}-${{ matrix.mode }}-cmd
+          path: logs/*-cmd.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Remove disposable macOS Keychain
         if: always() && runner.os == 'macOS'
         run: security delete-keychain "$RUNNER_TEMP/ctl-smoke.keychain-db"
