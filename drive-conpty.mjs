@@ -77,7 +77,9 @@ function readControl() {
       const label=cliSteps.get(event.pid)??state.label;
       if(event.pid===state.childPid)state={...state,phase:'CLI '+event.phase};
       const flags=['secret','stdinTTY','stdoutTTY','stderrTTY'].filter(key=>typeof event[key]==='boolean').map(key=>`${key}=${event[key]}`);
-      if(['module-load','execution-policy','command-not-found','access-denied','timeout','spawn-failed','other'].includes(event.category))flags.push('category='+event.category);
+      if(['module-load','execution-policy','command-not-found','access-denied','timeout','spawn-failed','native-error','other'].includes(event.category))flags.push('category='+event.category);
+      if(Number.isFinite(event.elapsedMs)&&event.elapsedMs>=0)flags.push('elapsedMs='+event.elapsedMs);
+      if(Number.isInteger(event.win32Code)&&event.win32Code>=0)flags.push('win32Code='+event.win32Code);
       if(Number.isInteger(event.exitCode)&&event.exitCode>=0)flags.push('exitCode='+event.exitCode);
       log(`[CLI PHASE] STEP=${label}; phase=${event.phase}; ${flags.join(' ')}`);
       if(event.pid===state.childPid)waiting('CLI '+event.phase+' completion or prompt pattern: '+promptPattern);

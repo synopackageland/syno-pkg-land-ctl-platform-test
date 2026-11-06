@@ -37,8 +37,8 @@ native store readback, call, 401 invalidation, failed update preserving the old
 record, interactive renewal without replay, manual rerun, ordinary update, 403
 preserving state, and local-only reset. Lists must not probe native APIs; native
 requests must carry no DSM session headers. Vault checks include decryption,
-nonce rotation and plaintext absence. Windows vault runs PowerShell `Get-Acl`
-checks for owner, disabled inheritance and current-user-only access, including
+nonce rotation and plaintext absence. Windows vault runs native owner/SDDL
+readback checks for owner, disabled inheritance and current-user-only access, including
 paths containing spaces and an apostrophe. Headless Linux must explicitly reject
 the default keychain and recommend encrypted-file before testing the vault.
 
@@ -88,9 +88,10 @@ reason/detail) through the live diagnostic channel. Windows temporary-directory
 cleanup retries eight times with a 200 ms retry delay; exhaustion warns without
 replacing the original error.
 
-Windows ACL inspection launches inbox Windows PowerShell by absolute path with
-PSModulePath reset to its own inbox modules and ExecutionPolicy Bypass for that
-child only. The optional private CLI phase channel now reports auth/browser
-confirmation, ACL inspection, TTY/raw-mode setup, prompt write/flush and input
-wait. It contains no input values, prompt text, paths or SIDs. `[CLI PHASE]` lines
-are streamed even when ConPTY itself has not produced the expected prompt.
+Windows ACL inspection no longer starts Windows PowerShell. The CLI uses a
+bounded Node/Win32 bridge for full owner+DACL SDDL, caches the current SID, and
+sets new private ACLs with icacls. The harness separately asserts current-user
+ownership, protected inheritance and current-user-only grants on all native
+files using the raw native readback. `[CLI PHASE] acl.done/acl.failed` includes
+`elapsedMs`; no paths, account names or SIDs are printed. The outer PowerShell
+and cmd shell coverage remains unchanged.

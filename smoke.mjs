@@ -9,7 +9,6 @@ import {pathToFileURL} from 'node:url';
 import http from 'node:http';
 import {once} from 'node:events';
 import {lookup} from 'node:dns/promises';
-import {windowsPowerShellEnvironment} from './windows-powershell.mjs';
 import {assertNativeStatus,cleanupTemporaryRoot} from './smoke-support.mjs';
 
 const source=process.argv[2];
@@ -89,11 +88,19 @@ const json=async(args,expected=0,input='')=>{const r=await cli([...args,'--json'
 const business=()=>events.filter(e=>e.path.endsWith('/api/items')).length;
 async function inspectWindowsAcl(){
  if(process.platform!=='win32'||!vault)return;
- trace('phase',{phase:'Windows PowerShell Get-Acl'});
- const source=`$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $files=@(Get-Item -LiteralPath $env:CTL_SMOKE_ACL_ROOT)+@(Get-ChildItem -LiteralPath $env:CTL_SMOKE_ACL_ROOT -Recurse -Force); foreach($f in $files){ $a=Get-Acl -LiteralPath $f.FullName; if(!$a.AreAccessRulesProtected -or $a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw 'Unsafe owner or inheritance'}; $allowed=$false; foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($r.AccessControlType -eq 'Allow'){if($r.IdentityReference.Value -ne $sid){throw 'Other principal allowed'}; $allowed=$true}}; if(!$allowed){throw 'No user access'} }; Write-Output 'PASS user-only vault ACLs'`;
- const ps=windowsPowerShellEnvironment();
- const r=await new Promise((done,reject)=>{const p=spawn(ps.file,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from(source,'utf16le').toString('base64')],{env:{...ps.env,CTL_SMOKE_ACL_ROOT:join(env.SYNOPKGLAND_CTL_DIR,'native')},stdio:['ignore','pipe','pipe'],windowsHide:true});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.once('error',reject);p.once('close',code=>done({code,out,err}));});
- assert.equal(r.code,0,r.out+r.err);console.log(r.out.trim());
+ trace('phase',{phase:'Windows native ACL readback'});
+ const {windowsAclSnapshot}=await load('ctl/windows-acl.js');
+ const pending=[join(env.SYNOPKGLAND_CTL_DIR,'native')];let checked=0;
+ while(pending.length){
+  const path=pending.pop(),snapshot=windowsAclSnapshot(path);
+  assert.equal(snapshot.owner,snapshot.currentUser,'Private ACL owner must be the current user');
+  assert.equal(snapshot.protected,true,'Private ACL must disable inheritance');assert.equal(snapshot.reparsePoint,false);
+  let allowed=false;
+  for(const rule of snapshot.rules)if(rule.type==='Allow'&&rule.rights){assert.equal(rule.sid,snapshot.currentUser,'Private ACL permits another principal');allowed=true;}
+  assert.ok(allowed,'Private ACL must allow the current user');checked++;
+  if(snapshot.directory)for(const entry of readdirSync(path,{withFileTypes:true})){assert.ok(!entry.isSymbolicLink(),'Private ACL fixture contains a link');pending.push(join(path,entry.name));}
+ }
+ console.log(`PASS user-only vault ACLs (native readback, ${checked} objects)`);
 }
 const currentRecord=key=>{trace('phase',{phase:'read native credential record'});return backend==='keychain'?keychain.get(key):Promise.resolve(readFileSync(join(env.SYNOPKGLAND_CTL_DIR,'native',key+'.vault'),'utf8'));};
 const status=async(state)=>{const before=events.length,r=await json(['list','--refresh']);assertNativeStatus(state,r,readFileSync(process.env.CTL_SMOKE_CONTROL,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)),message=>{console.error(message);trace('diagnostic',{message});});assert.equal(events.length,before,'list must not probe native APIs');};
